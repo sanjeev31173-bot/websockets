@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>NHS Realtime Consult Demo</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      body {
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+        background: #0f172a;
+        color: #e5e7eb;
+        margin: 0;
+        padding: 2rem;
+        display: flex;
+        flex-direction: column;
+        gap: 1.5rem;
+      }
+      .card {
+        max-width: 960px;
+        margin: 0 auto;
+        background: #020617;
+        border-radius: 1rem;
+        padding: 1.5rem 1.75rem;
+        box-shadow: 0 18px 45px rgba(15, 23, 42, 0.85);
+        border: 1px solid rgba(148, 163, 184, 0.18);
+      }
+      h1 {
+        font-size: 1.5rem;
+        margin: 0 0 0.25rem;
+      }
+      h2 {
+        font-size: 1rem;
+        margin-top: 1.5rem;
+        margin-bottom: 0.5rem;
+        color: #e5e7eb;
+      }
+      p {
+        margin: 0.15rem 0;
+        color: #9ca3af;
+      }
+      button {
+        border-radius: 999px;
+        border: 0;
+        padding: 0.6rem 1.3rem;
+        font-size: 0.95rem;
+        font-weight: 600;
+        cursor: pointer;
+        background: linear-gradient(135deg, #22c55e, #14b8a6);
+        color: #020617;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        box-shadow: 0 10px 30px rgba(34, 197, 94, 0.55);
+      }
+      button[disabled] {
+        opacity: 0.4;
+        cursor: not-allowed;
+        box-shadow: none;
+      }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        border-radius: 999px;
+        padding: 0.25rem 0.7rem;
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        background: rgba(15, 118, 110, 0.16);
+        color: #6ee7b7;
+      }
+      .row {
+        display: flex;
+        gap: 1rem;
+        margin-top: 1.25rem;
+        flex-wrap: wrap;
+      }
+      .col {
+        flex: 1 1 260px;
+        min-width: 0;
+      }
+      .box {
+        background: #020617;
+        border-radius: 0.85rem;
+        padding: 0.9rem 1rem;
+        border: 1px solid rgba(148, 163, 184, 0.22);
+        min-height: 120px;
+        max-height: 260px;
+        overflow-y: auto;
+        font-size: 0.9rem;
+        line-height: 1.5;
+        white-space: pre-wrap;
+      }
+      .label {
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: #6b7280;
+        margin-bottom: 0.3rem;
+      }
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.3rem;
+        border-radius: 999px;
+        padding: 0.15rem 0.55rem;
+        font-size: 0.65rem;
+        background: rgba(15, 23, 42, 0.9);
+        border: 1px solid rgba(148, 163, 184, 0.35);
+      }
+      .status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 999px;
+        background: #22c55e;
+      }
+      .status-dot.off {
+        background: #ef4444;
+      }
+      code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+          "Liberation Mono", "Courier New", monospace;
+        font-size: 0.75rem;
+        background: rgba(15, 23, 42, 0.9);
+        padding: 0.15rem 0.4rem;
+        border-radius: 999px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div style="display: flex; justify-content: space-between; gap: 0.75rem">
+        <div>
+          <div class="pill">Realtime NHS Consult • Demo</div>
+          <h1>Doctor–Patient Streaming Transcription</h1>
+          <p>
+            Press <strong>Start recording</strong>, then speak as the patient.
+            Audio is streamed via WebSocket to the backend, transcribed with
+            Whisper, and analyzed by an LLM against NHS-style rules.
+          </p>
+        </div>
+        <div style="text-align: right; min-width: 150px">
+          <div class="badge">
+            <div id="ws-dot" class="status-dot off"></div>
+            <span id="ws-label">Disconnected</span>
+          </div>
+          <p style="margin-top: 0.4rem">
+            Session:
+            <code id="session-id"></code>
+          </p>
+        </div>
+      </div>
+
+      <div style="margin-top: 1.5rem; display: flex; align-items: center; gap: 1rem">
+        <button id="record-btn">Start recording</button>
+        <p id="record-status">Microphone idle.</p>
+      </div>
+
+      <div class="row">
+        <div class="col">
+          <div class="label">Live transcript</div>
+          <div id="transcript-box" class="box"></div>
+        </div>
+        <div class="col">
+          <div class="label">LLM clinical summary</div>
+          <div id="analysis-box" class="box"></div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const recordBtn = document.getElementById("record-btn");
+      const recordStatus = document.getElementById("record-status");
+      const transcriptBox = document.getElementById("transcript-box");
+      const analysisBox = document.getElementById("analysis-box");
+      const sessionIdEl = document.getElementById("session-id");
+      const wsDot = document.getElementById("ws-dot");
+      const wsLabel = document.getElementById("ws-label");
+      let websocket = null;
+      let isRecording = false;
+      let sessionId = crypto.randomUUID();
+      sessionIdEl.textContent = sessionId;
+
+      let audioContext = null;
+      let mediaStream = null;
+      let scriptNode = null;
+
+      function setWsStatus(connected) {
+        if (connected) {
+          wsDot.classList.remove("off");
+          wsLabel.textContent = "Connected";
+        } else {
+          wsDot.classList.add("off");
+          wsLabel.textContent = "Disconnected";
+        }
+      }
+
+      function floatTo16BitPCM(float32Array) {
+        const buffer = new ArrayBuffer(float32Array.length * 2);
+        const view = new DataView(buffer);
+        let offset = 0;
+        for (let i = 0; i < float32Array.length; i++, offset += 2) {
+          let s = Math.max(-1, Math.min(1, float32Array[i]));
+          view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+        }
+        return buffer;
+      }
+
+      async function startRecording() {
+        if (isRecording) return;
+
+        transcriptBox.textContent = "";
+        analysisBox.textContent = "";
+
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          audio: true,
+          video: false,
+        });
+
+        audioContext = new (window.AudioContext || window.webkitAudioContext)({
+          sampleRate: 16000,
+        });
+
+        const source = audioContext.createMediaStreamSource(mediaStream);
+        scriptNode = audioContext.createScriptProcessor(4096, 1, 1);
+
+        const wsUrl =
+          (location.protocol === "https:" ? "wss://" : "ws://") +
+          location.host +
+          "/ws/consultation/" +
+          sessionId;
+
+        websocket = new WebSocket(wsUrl);
+        websocket.binaryType = "arraybuffer";
+
+        websocket.onopen = () => {
+          setWsStatus(true);
+          recordBtn.textContent = "Stop recording";
+          recordBtn.disabled = false;
+          recordStatus.textContent = "Recording… speak as the patient.";
+
+          scriptNode.onaudioprocess = (audioProcessingEvent) => {
+            const inputBuffer = audioProcessingEvent.inputBuffer.getChannelData(
+              0
+            );
+            if (websocket && websocket.readyState === WebSocket.OPEN) {
+              const pcm16 = floatTo16BitPCM(inputBuffer);
+              websocket.send(pcm16);
+            }
+          };
+
+          source.connect(scriptNode);
+          scriptNode.connect(audioContext.destination);
+        };
+
+        websocket.onmessage = (event) => {
+          if (typeof event.data === "string") {
+            try {
+              const parsed = JSON.parse(event.data);
+              if (parsed.type === "analysis") {
+                analysisBox.textContent = JSON.stringify(
+                  parsed.data,
+                  null,
+                  2
+                );
+                return;
+              }
+              if (parsed.type === "analysis_error") {
+                analysisBox.textContent = "Analysis error: " + parsed.error;
+                return;
+              }
+            } catch {
+              // Treat as plain transcript text.
+            }
+            transcriptBox.textContent += event.data + " ";
+            transcriptBox.scrollTop = transcriptBox.scrollHeight;
+          }
+        };
+
+        websocket.onclose = () => {
+          setWsStatus(false);
+          recordBtn.textContent = "Start recording";
+          recordBtn.disabled = false;
+          recordStatus.textContent = "Connection closed.";
+        };
+
+        websocket.onerror = () => {
+          setWsStatus(false);
+          recordStatus.textContent = "WebSocket error – see console.";
+        };
+
+        isRecording = true;
+        recordBtn.disabled = true; // re-enabled on ws open
+      }
+
+      function stopRecording() {
+        if (!isRecording) return;
+        isRecording = false;
+
+        if (scriptNode) {
+          scriptNode.disconnect();
+          scriptNode.onaudioprocess = null;
+          scriptNode = null;
+        }
+        if (audioContext) {
+          audioContext.close();
+          audioContext = null;
+        }
+        if (mediaStream) {
+          mediaStream.getTracks().forEach((t) => t.stop());
+          mediaStream = null;
+        }
+
+        if (websocket && websocket.readyState === WebSocket.OPEN) {
+          websocket.send("END");
+        }
+
+        recordBtn.textContent = "Start recording";
+        recordStatus.textContent =
+          "Recording stopped. Waiting for final analysis…";
+      }
+
+      recordBtn.addEventListener("click", () => {
+        if (!isRecording) {
+          startRecording().catch((err) => {
+            console.error(err);
+            recordStatus.textContent =
+              "Failed to start recording. Check microphone permissions.";
+          });
+        } else {
+          stopRecording();
+        }
+      });
+    </script>
+  </body>
+</html>
+
