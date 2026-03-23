@@ -1,0 +1,7 @@
+fastapi[all]==0.115.0
+uvicorn[standard]==0.30.0
+python-multipart==0.0.9
+numpy
+faster-whisper
+redis
+websockets>=11.0  # Required for automated_test_client.py
